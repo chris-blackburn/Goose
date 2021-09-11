@@ -3,15 +3,20 @@ import aiohttp
 
 from .base import Egg, EggException
 
-class EpicGame:
-    BASE_URL = "https://www.epicgames.com/store/en-US/p/"
+class EpicEgg(Egg):
+    # I found two urls while web scraping epic games store. The sketch
+    # looking one gives far less data (in the same format I'd have to
+    # request from the graphql endpoint). Since I don't want to deal with
+    # pagination from the graphql endpoint, I'm using the sketch one.
+    #
+    # https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions
+    # https://www.epicgames.com/graphql
+    endpoint = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
+    store = "https://www.epicgames.com/store/product/"
 
-    def __init__(self, title, urlSlug):
-        self.title = title
-        self.url = self.BASE_URL + urlSlug
-
-    def __str__(self):
-        return "title={},url={}".format(self.title, self.url)
+    @property
+    def name(self):
+        return "Epic Games"
 
     @staticmethod
     def __is_free(raw):
@@ -23,26 +28,31 @@ class EpicGame:
         except (KeyError, IndexError, TypeError):
             return False
 
+    @staticmethod
+    def __get_thumbnail(raw):
+        for key_image in raw["keyImages"]:
+            if key_image["type"] == "Thumbnail":
+                return key_image["url"]
+
+        return None
+
     @classmethod
     def filterFree(cls, raw_games):
-        freelist = map(lambda game: cls(game["title"], game["urlSlug"]),
-                filter(cls.__is_free, raw_games))
+        args = lambda game: (
+            game["title"],
+            game["description"],
+            cls.store + game["urlSlug"],
+            cls.__get_thumbnail(game)
+        )
+
+        construct = lambda game: cls(*args(game))
+        freelist = map(construct, filter(cls.__is_free, raw_games))
         return list(freelist)
 
-class EpicEgg(Egg):
-    def __init__(self):
-        # I found two urls while web scraping epic games store. The sketch
-        # looking one gives far less data (in the same format I'd have to
-        # request from the graphql endpoint). Since I don't want to deal with
-        # pagination from the graphql endpoint, I'm using the sketch one.
-        #
-        # https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions
-        # https://www.epicgames.com/graphql
-        self.endpoint = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
-
-    async def fetch(self, only_new=True):
+    @classmethod
+    async def fetch(cls, only_new=True):
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.endpoint) as response:
+            async with session.get(cls.endpoint) as response:
                 if response.status != 200:
                     raise EggException("Epic {}".format(response.status))
 
@@ -53,4 +63,4 @@ class EpicEgg(Egg):
                 except KeyError as e:
                     raise EggException("Epic: {}".format(e))
 
-                return EpicGame.filterFree(games)
+                return cls.filterFree(games)

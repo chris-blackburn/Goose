@@ -45,8 +45,11 @@ async def honk(ctx):
     """
     self = ctx.bot
     self.log.info("Checking for golden eggs")
-    results = await self.fetchAll()
-    await ctx.send([str(game) for game in results])
+    results = await self.fetchAll(only_new=False)
+
+    tasks = [self.loop.create_task(ctx.send(embed=egg.embed())) for egg in
+            results]
+    await asyncio.gather(*tasks)
 
 class Goose(commands.Bot):
     def __init__(self, logger, *args, **kwargs):
@@ -61,17 +64,17 @@ class Goose(commands.Bot):
         self.add_command(honk)
 
         #self.eggs = [EpicEgg()]
-        self.epic = EpicEgg()
+        self.epic = EpicEgg
 
         # Probably a better way to do this, but for now, going to keep a
         # dictionary matching channels to polling tasks
         self.pollers = {}
 
-    async def fetchAll(self):
+    async def fetchAll(self, *args, **kwargs):
         ## TODO: handle pending
         #done, pending = await asyncio.wait([egg.fetch for egg in self.eggs])
         #return [fut.result() for fut in done]
-        return await self.epic.fetch()
+        return await self.epic.fetch(*args, **kwargs)
 
     async def poll(self, channel_id: int, channel_dead_cb, minutes: int = 30):
         while not self.is_closed():
