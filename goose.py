@@ -7,7 +7,7 @@ import asyncio
 import discord
 from discord.ext import commands
 
-from eggs.epic import EpicEgg
+from .eggs.epic import EpicEgg
 
 import logging
 
@@ -17,27 +17,22 @@ log.setLevel(logging.DEBUG)
 
 DEFAULT_PREFIX = "!"
 
-POLL_INTERVAL = 1
+DEFAULT_POLL_INTERVAL = 24 * 60 * 60
+
+@commands.command()
+async def bonk(ctx):
+    await ctx.send("Go to horny jail")
 
 @commands.command()
 async def nest(ctx):
     """
-    Give goose a channel to update periodically
+    Register a channel with goose to update periodically
     """
     self = ctx.bot
 
-    # Replace the old task
-    old = self.pollers.get(ctx.channel.id, None)
-    if old:
-        # TODO: do something more graceful
-        old.cancel()
-
-    cb = lambda channel_id: self.pollers.pop(channel_id, None)
-    task = self.loop.create_task(self.poll(ctx.channel.id, cb))
+    self.watchers.append(ctx.channel.id)
 
     embed = await self.summary()
-
-    self.pollers[ctx.channel.id] = task
     await ctx.send("Got it, I'll notify you when there are new offers. In the meantime, check out the current offers:")
     await ctx.send(embed=embed)
 
@@ -61,12 +56,12 @@ class Goose(commands.Bot):
 
         self.add_command(nest)
         self.add_command(honk)
+        self.add_command(bonk)
 
         self.eggs = [EpicEgg]
 
-        # Probably a better way to do this, but for now, going to keep a
-        # dictionary matching channels to polling tasks
-        self.pollers = {}
+        self.loop.create_task(self.broadcast())
+        self.watchers = []
 
     async def summary(self) -> discord.Embed:
         embed = discord.Embed(
@@ -89,34 +84,40 @@ class Goose(commands.Bot):
         return embed
 
     async def fetchAll(self):
-        done, pending = await asyncio.wait([egg.fetch() for egg in self.eggs])
+        tasks = [egg.fetch() for egg in self.eggs]
+        results = await asyncio.gather(*tasks)
+
         eggs = []
-        for fut in done:
-            eggs.extend(fut.result())
+        for result in results:
+            eggs.extend(result)
         return eggs
 
-    async def poll(self, channel_id: int, channel_dead_cb):
-        try:
-            while not self.is_closed():
-                try:
-                    await asyncio.sleep(POLL_INTERVAL)
-                except asyncio.CancelledError:
-                    break
+    async def broadcast(self):
+        poll_interval = int(os.getenv("POLL_INTERVAL",
+                default=DEFAULT_POLL_INTERVAL))
+        await self.wait_until_ready()
+        while not self.is_closed():
+            await asyncio.sleep(poll_interval)
 
-                channel = self.get_channel(channel_id)
+            # Get live channels
+            self.watchers[:] = filter(self.get_channel, self.watchers)
+            channels = [self.get_channel(chid) for chid in self.watchers]
 
-                # If the channel doesn't exist, break
-                if not channel:
-                    break
+            # TODO: until I have a db, no point in fetching everything
+            if not channels:
+                continue
 
-                results = await self.fetchAll()
+            # TODO: Fetch only new, not all
+            eggs = await self.fetchAll()
+
+            # send each egg to each channel
+            groups = []
+            for channel in channels:
                 tasks = [self.loop.create_task(channel.send(embed=egg.embed())) \
-                        for egg in results]
-                asyncio.shield(asyncio.gather(*tasks))
-        except asyncio.CancelledError:
-            pass
-        finally:
-            channel_dead_cb(channel_id)
+                        for egg in eggs]
+                groups.append(asyncio.gather(*tasks))
+
+            await asyncio.gather(*groups)
 
 if __name__=="__main__":
     token = os.getenv("TOKEN")
