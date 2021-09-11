@@ -8,6 +8,8 @@ import requests
 import discord
 from discord.ext import commands
 
+from eggs.epic import EpicEgg
+
 import logging
 
 logging.basicConfig()
@@ -18,22 +20,40 @@ DEFAULT_PREFIX = "!"
 
 @commands.command()
 async def nest(ctx, minutes: int = 30):
+    """
+    Give goose a channel to update periodically
+    """
     self = ctx.bot
     self.stop_poll()
 
-    minutes = max(1, minutes)
-    self.poll_task = self.loop.create_task(self.poll(ctx.channel.id, minutes))
-    await ctx.send("I will be nesting here now, see you in {} min".format(
+    # Replace the old task
+    old = self.pollers.get(ctx.channel.id, None)
+    if old:
+        # TODO: do something more graceful
+        old.cancel()
+
+    minutes = max(30, minutes)
+    cb = lambda channel_id: self.pollers.pop(channel_id, None)
+    task = self.loop.create_task(self.poll(ctx.channel.id, cb, minutes=minutes))
+
+    self.pollers[ctx.channel.id] = task
+    await ctx.send("Got it, I'll send updates here every {} mintues if there are any".format(
         minutes))
 
 @commands.command()
 async def honk(ctx):
+    """
+    Check for updates
+    """
     self = ctx.bot
     self.log.info("Checking for golden eggs")
-    await ctx.send(await self.do_update())
+    results = await self.fetchAll()
+    await ctx.send(results)
 
 class Goose(commands.Bot):
     def __init__(self, logger, *args, **kwargs):
+        self.log = logger
+
         intents = discord.Intents.default()
         intents.messages = True
 
@@ -42,45 +62,35 @@ class Goose(commands.Bot):
         self.add_command(nest)
         self.add_command(honk)
 
-        self.log = logger
+        #self.eggs = [EpicEgg()]
+        self.epic = EpicEgg()
 
-    async def do_update(self):
-        r = requests.get("https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions")
-        if r.status_code != 200:
-            self.log.info("Received {} from epic games".format(r.status_code))
-            return "Sorry, no new golden eggs"
+        # Probably a better way to do this, but for now, going to keep a
+        # dictionary matching channels to polling tasks
+        self.pollers = {}
 
-        body = r.json()
+    async def fetchAll(self):
+        ## TODO: handle pending
+        #done, pending = await asyncio.wait([egg.fetch for egg in self.eggs])
+        #return [fut.result() for fut in done]
+        return await self.epic.fetch()
 
-        def weekly(game):
-            if game["promotions"] and \
-                    len(game["promotions"]["promotionalOffers"]):
-                return True
+    async def poll(self, channel_id: int, channel_dead_cb, minutes: int = 30):
+        while not self.is_closed():
+            await asyncio.sleep(minutes * 60)
 
-            return False
+            self.log.debug("Getting channel from id: {}".format(channel_id))
+            channel = self.get_channel(channel_id)
 
-        free_games = filter(weekly,
-                body["data"]["Catalog"]["searchStore"]["elements"])
-        titles = map(lambda game : game["title"], free_games)
-        return "Awwww yeah, sweet golden eggs: {}".format(list(titles))
+            # If the channel doesn't exist, break
+            if not channel:
+                break
 
-    async def poll(self, channel_id: int, minutes: int = 30):
-        try:
-            while not self.is_closed():
-                await asyncio.sleep(max(60, minutes * 60))
-                self.log.debug("Getting channel from id: {}".format(channel_id))
-                channel = self.get_channel(channel_id)
-                if not channel:
-                    self.poll_task = None
-                    break
-                await channel.send(await self.do_update())
-        except asyncio.CancelledError:
-            pass
+            results = await self.fetchAll()
+            asyncio.shield(channel.send(
+                "Here's your periodic update: {}".format(results)))
 
-    def stop_poll(self):
-        task = getattr(self, "poll_task", None)
-        if task:
-            task.cancel()
+        channel_dead_cb(channel_id)
 
 if __name__=="__main__":
     token = os.getenv("TOKEN")
