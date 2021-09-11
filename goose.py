@@ -16,7 +16,6 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 DEFAULT_PREFIX = "!"
-
 DEFAULT_POLL_INTERVAL = 24 * 60 * 60
 
 @commands.command()
@@ -59,6 +58,8 @@ class Goose(commands.Bot):
         self.add_command(bonk)
 
         self.eggs = [EpicEgg]
+
+        self.broadcasted = {}
 
         self.loop.create_task(self.broadcast())
         self.watchers = []
@@ -103,12 +104,14 @@ class Goose(commands.Bot):
             self.watchers[:] = filter(self.get_channel, self.watchers)
             channels = [self.get_channel(chid) for chid in self.watchers]
 
-            # TODO: until I have a db, no point in fetching everything
             if not channels:
                 continue
 
-            # TODO: Fetch only new, not all
-            eggs = await self.fetchAll()
+            eggs = []
+            for egg in await self.fetchAll():
+                if egg.id not in self.broadcasted.keys():
+                    eggs.append(egg)
+                self.broadcasted[egg.id] = egg
 
             # send each egg to each channel
             groups = []
