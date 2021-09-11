@@ -17,8 +17,10 @@ log.setLevel(logging.DEBUG)
 
 DEFAULT_PREFIX = "!"
 
+POLL_INTERVAL = 1
+
 @commands.command()
-async def nest(ctx, minutes: int = 30):
+async def nest(ctx):
     """
     Give goose a channel to update periodically
     """
@@ -30,13 +32,14 @@ async def nest(ctx, minutes: int = 30):
         # TODO: do something more graceful
         old.cancel()
 
-    minutes = max(30, minutes)
     cb = lambda channel_id: self.pollers.pop(channel_id, None)
-    task = self.loop.create_task(self.poll(ctx.channel.id, cb, minutes=minutes))
+    task = self.loop.create_task(self.poll(ctx.channel.id, cb))
+
+    embed = await self.summary()
 
     self.pollers[ctx.channel.id] = task
-    await ctx.send("Got it, I'll send updates here every {} mintues if there are any".format(
-        minutes))
+    await ctx.send("Got it, I'll notify you when there are new offers. In the meantime, check out the current offers:")
+    await ctx.send(embed=embed)
 
 @commands.command()
 async def honk(ctx):
@@ -44,12 +47,8 @@ async def honk(ctx):
     Check for updates
     """
     self = ctx.bot
-    self.log.info("Checking for golden eggs")
-    results = await self.fetchAll(only_new=False)
-
-    tasks = [self.loop.create_task(ctx.send(embed=egg.embed())) for egg in
-            results]
-    await asyncio.gather(*tasks)
+    embed = await self.summary()
+    await ctx.send(embed=embed)
 
 class Goose(commands.Bot):
     def __init__(self, logger, *args, **kwargs):
@@ -63,35 +62,61 @@ class Goose(commands.Bot):
         self.add_command(nest)
         self.add_command(honk)
 
-        #self.eggs = [EpicEgg()]
-        self.epic = EpicEgg
+        self.eggs = [EpicEgg]
 
         # Probably a better way to do this, but for now, going to keep a
         # dictionary matching channels to polling tasks
         self.pollers = {}
 
-    async def fetchAll(self, *args, **kwargs):
-        ## TODO: handle pending
-        #done, pending = await asyncio.wait([egg.fetch for egg in self.eggs])
-        #return [fut.result() for fut in done]
-        return await self.epic.fetch(*args, **kwargs)
+    async def summary(self) -> discord.Embed:
+        embed = discord.Embed(
+                title="Free games",
+                color=0xffd700
+        )
 
-    async def poll(self, channel_id: int, channel_dead_cb, minutes: int = 30):
-        while not self.is_closed():
-            await asyncio.sleep(minutes * 60)
+        all_eggs = await self.fetchAll()
 
-            self.log.debug("Getting channel from id: {}".format(channel_id))
-            channel = self.get_channel(channel_id)
+        games = {}
+        for egg in all_eggs:
+            if egg.name not in games:
+                games[egg.name] = []
+            games[egg.name].append(egg)
 
-            # If the channel doesn't exist, break
-            if not channel:
-                break
+        for source, eggs in games.items():
+            embed.add_field(name=source, value="\n".join(
+                ["[{}]({})".format(egg.title, egg.url) for egg in eggs]))
 
-            results = await self.fetchAll()
-            asyncio.shield(channel.send(
-                "Here's your periodic update: {}".format(results)))
+        return embed
 
-        channel_dead_cb(channel_id)
+    async def fetchAll(self):
+        done, pending = await asyncio.wait([egg.fetch() for egg in self.eggs])
+        eggs = []
+        for fut in done:
+            eggs.extend(fut.result())
+        return eggs
+
+    async def poll(self, channel_id: int, channel_dead_cb):
+        try:
+            while not self.is_closed():
+                try:
+                    await asyncio.sleep(POLL_INTERVAL)
+                except asyncio.CancelledError:
+                    break
+
+                channel = self.get_channel(channel_id)
+
+                # If the channel doesn't exist, break
+                if not channel:
+                    break
+
+                results = await self.fetchAll()
+                tasks = [self.loop.create_task(channel.send(embed=egg.embed())) \
+                        for egg in results]
+                asyncio.shield(asyncio.gather(*tasks))
+        except asyncio.CancelledError:
+            pass
+        finally:
+            channel_dead_cb(channel_id)
 
 if __name__=="__main__":
     token = os.getenv("TOKEN")

@@ -8,7 +8,8 @@ class Egg:
     """
     Eggs are games
     """
-    def __init__(self, title, description, url, thumbnail):
+    def __init__(self, gid, title, description, url, thumbnail):
+        self.id = gid
         self.title = title
         self.description = description
         self.url = url
@@ -33,9 +34,8 @@ class Egg:
 
         return embed
 
-
     @classmethod
-    async def fetch(cls, only_new=True):
+    async def fetch(cls):
         """
         Factory for eggs - should reach out to the egg's store and return a list
         of this egg's intances

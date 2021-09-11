@@ -3,6 +3,9 @@ import aiohttp
 
 from .base import Egg, EggException
 
+# TODO: safety in accessing json and error handling, but it's probably good
+# enough for now
+
 class EpicEgg(Egg):
     # I found two urls while web scraping epic games store. The sketch
     # looking one gives far less data (in the same format I'd have to
@@ -39,6 +42,7 @@ class EpicEgg(Egg):
     @classmethod
     def filterFree(cls, raw_games):
         args = lambda game: (
+            game["id"],
             game["title"],
             game["description"],
             cls.store + game["urlSlug"],
@@ -50,7 +54,7 @@ class EpicEgg(Egg):
         return list(freelist)
 
     @classmethod
-    async def fetch(cls, only_new=True):
+    async def fetch(cls):
         async with aiohttp.ClientSession() as session:
             async with session.get(cls.endpoint) as response:
                 if response.status != 200:
