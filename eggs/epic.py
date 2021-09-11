@@ -1,36 +1,56 @@
 import asyncio
 import aiohttp
 
-class EggException(Exception):
-    pass
+from .base import Egg, EggException
 
-class Egg:
-    pass
+class EpicGame:
+    BASE_URL = "https://www.epicgames.com/store/en-US/p/"
+
+    def __init__(self, title, urlSlug):
+        self.title = title
+        self.url = self.BASE_URL + urlSlug
+
+    def __str__(self):
+        return "title={},url={}".format(self.title, self.url)
+
+    @staticmethod
+    def __is_free(raw):
+        """
+        So cringe, but with this I can tell if a game is free or not
+        """
+        try:
+            return raw["promotions"]["promotionalOffers"][0]["promotionalOffers"][0]["discountSetting"]["discountPercentage"] == 0
+        except (KeyError, IndexError, TypeError):
+            return False
+
+    @classmethod
+    def filterFree(cls, raw_games):
+        freelist = map(lambda game: cls(game["title"], game["urlSlug"]),
+                filter(cls.__is_free, raw_games))
+        return list(freelist)
 
 class EpicEgg(Egg):
     def __init__(self):
+        # I found two urls while web scraping epic games store. The sketch
+        # looking one gives far less data (in the same format I'd have to
+        # request from the graphql endpoint). Since I don't want to deal with
+        # pagination from the graphql endpoint, I'm using the sketch one.
+        #
+        # https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions
+        # https://www.epicgames.com/graphql
         self.endpoint = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
 
-    async def processResponse(self, response):
-        if response.status != 200:
-            self.log.info("Received {} from epic games".format(response.status))
-            raise EggException("Epic {}".format(response.status))
-
-        body = await response.json()
-
-        # TODO: grab the links instead and maybe clean up this garbage
-        weekly = lambda game: (game["promotions"] and \
-                len(game["promotions"]["promotionalOffers"]))
-
-        free_games = filter(weekly,
-                body["data"]["Catalog"]["searchStore"]["elements"])
-        titles = map(lambda game : game["title"], free_games)
-        return list(titles)
-
-    async def _fetch(self, session):
-        async with session.get(self.endpoint) as response:
-            return await self.processResponse(response)
-
-    async def fetch(self):
+    async def fetch(self, only_new=True):
         async with aiohttp.ClientSession() as session:
-            return await self._fetch(session)
+            async with session.get(self.endpoint) as response:
+                if response.status != 200:
+                    raise EggException("Epic {}".format(response.status))
+
+                body = await response.json()
+
+                try:
+                    games = body["data"]["Catalog"]["searchStore"]["elements"]
+                except KeyError as e:
+                    raise EggException("Epic: {}".format(e))
+
+                return EpicGame.filterFree(games)

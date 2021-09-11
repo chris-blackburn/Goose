@@ -3,7 +3,6 @@
 import os
 import sys
 import asyncio
-import requests
 
 import discord
 from discord.ext import commands
@@ -24,7 +23,6 @@ async def nest(ctx, minutes: int = 30):
     Give goose a channel to update periodically
     """
     self = ctx.bot
-    self.stop_poll()
 
     # Replace the old task
     old = self.pollers.get(ctx.channel.id, None)
@@ -48,7 +46,7 @@ async def honk(ctx):
     self = ctx.bot
     self.log.info("Checking for golden eggs")
     results = await self.fetchAll()
-    await ctx.send(results)
+    await ctx.send([str(game) for game in results])
 
 class Goose(commands.Bot):
     def __init__(self, logger, *args, **kwargs):
