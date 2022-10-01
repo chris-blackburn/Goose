@@ -1,11 +1,8 @@
-import asyncio
 import aiohttp
 
-from .base import Egg, EggException
+from .base import Egg, EggSource, EggException
 
-# TODO: safety in accessing json and error handling, but it's probably good
-# enough for now
-
+@Egg.source(EggSource.EPIC)
 class EpicEgg(Egg):
     # I found two urls while web scraping epic games store. The sketch
     # looking one gives far less data (in the same format I'd have to
@@ -17,40 +14,44 @@ class EpicEgg(Egg):
     endpoint = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
     store = "https://www.epicgames.com/store/product/"
 
-    @property
-    def name(self):
-        return "Epic Games"
-
     @staticmethod
-    def __is_free(raw):
-        """
-        So cringe, but with this I can tell if a game is free or not
-        """
+    def _is_free(raw):
         try:
             return raw["promotions"]["promotionalOffers"][0]["promotionalOffers"][0]["discountSetting"]["discountPercentage"] == 0
         except (KeyError, IndexError, TypeError):
             return False
 
     @staticmethod
-    def __get_thumbnail(raw):
+    def _get_thumbnail(raw):
         for key_image in raw["keyImages"]:
             if key_image["type"] == "Thumbnail":
                 return key_image["url"]
 
         return None
 
+    @staticmethod
+    def _get_page_url(raw):
+        # If there is an offer mappings array, then we need to find the element
+        # with the productHome page type and use that url, otherwise, it has to
+        # be the urlslug
+        for mapping in raw["offerMappings"]:
+            if mapping["pageType"] == "productHome":
+                return mapping["pageSlug"]
+
+        return raw["urlSlug"]
+
     @classmethod
-    def filterFree(cls, raw_games):
+    def _filter_free(cls, raw_games):
         args = lambda game: (
             game["id"],
             game["title"],
             game["description"],
-            cls.store + game["urlSlug"],
-            cls.__get_thumbnail(game)
+            cls.store + cls._get_page_url(game),
+            cls._get_thumbnail(game)
         )
 
         construct = lambda game: cls(*args(game))
-        freelist = map(construct, filter(cls.__is_free, raw_games))
+        freelist = map(construct, filter(cls._is_free, raw_games))
         return list(freelist)
 
     @classmethod
@@ -67,4 +68,4 @@ class EpicEgg(Egg):
                 except KeyError as e:
                     raise EggException("Epic: {}".format(e))
 
-                return cls.filterFree(games)
+                return cls._filter_free(games)
